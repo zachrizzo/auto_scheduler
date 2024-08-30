@@ -18,6 +18,8 @@ font = pygame.font.Font(None, 24)
 
 schools = ["School A", "School B"]
 time_slots = ["9:00", "10:00", "11:00", "14:00", "15:00"]
+interests = ["Math", "Science", "History", "Arts"]
+locations = ["Classroom", "Recess", "Speech Therapy Room", "Library", "Gym"]  # New locations added
 
 rooms = [
     pygame.Rect(50, 50, 200, 200),
@@ -40,14 +42,16 @@ student_colors = [
 ]
 
 students = [
-    {"name": "Alice", "grade": 9, "school": "School A", "preferred_time": "9:00", "color": student_colors[0]},
-    {"name": "Bob", "grade": 10, "school": "School A", "preferred_time": "10:00", "color": student_colors[1]},
-    {"name": "Charlie", "grade": 11, "school": "School B", "preferred_time": "11:00", "color": student_colors[2]},
-    {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3]},
-    {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4]},
-    {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5]},
-    {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6]},
-    {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7]},
+    {"name": "Alice", "grade": 9, "school": "School A", "preferred_time": "9:00", "color": student_colors[0], "interest": "Math", "location": "Classroom"},
+    {"name": "Bob", "grade": 10, "school": "School A", "preferred_time": "10:00", "color": student_colors[1], "interest": "Science", "location": "Recess"},
+    {"name": "Charlie", "grade": 11, "school": "School B", "preferred_time": "11:00", "color": student_colors[2], "interest": "History", "location": "Speech Therapy Room"},
+    {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3], "interest": "Arts", "location": "Library"},
+    {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4], "interest": "Math", "location": "Gym"},
+    {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5], "interest": "Science", "location": "Classroom"},
+    {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6], "interest": "History", "location": "Recess"},
+    {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7], "interest": "Arts", "location": "Speech Therapy Room"},
+    {"name": "Ivy", "grade": 9, "school": "School A", "preferred_time": "14:00", "color": student_colors[0], "interest": "Math", "location": "Library"},
+    {"name": "Jack", "grade": 10, "school": "School B", "preferred_time": "15:00", "color": student_colors[1], "interest": "Science", "location": "Gym"},
 ]
 
 teachers = [
@@ -82,7 +86,10 @@ def evaluate_grouping(genomes, config):
             inputs = (
                 student["grade"] / 12,
                 schools.index(student["school"]) / len(schools),
-                time_slots.index(student["preferred_time"]) / len(time_slots)
+                time_slots.index(student["preferred_time"]) / len(time_slots),
+                interests.index(student["interest"]) / len(interests),  # Interest input
+                int(any(teacher["obstacle"] == student["preferred_time"] for teacher in teachers)),  # Obstacle input
+                locations.index(student["location"]) / len(locations)  # Location input
             )
             output = net.activate(inputs)
 
@@ -90,12 +97,14 @@ def evaluate_grouping(genomes, config):
             group_index = min(int(output[0] * len(groups)), len(groups) - 1)
 
             # Check group constraints and assign students
-            if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in groups[group_index]):
+            if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in groups[group_index]) and \
+               all(student["location"] == existing_student["location"] for existing_student in groups[group_index]):  # Check location match
                 groups[group_index].append(student)
             else:
                 # Find alternative group or penalize heavily
                 for i, group in enumerate(groups):
-                    if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group):
+                    if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group) and \
+                       all(student["location"] == existing_student["location"] for existing_student in group):  # Check location match
                         groups[i].append(student)
                         break
                 else:
@@ -167,45 +176,83 @@ def draw_groups(groups, genome_id, fitness):
 
 
 def draw_neural_network(net, genome_id, fitness):
-    start_x = SCREEN_WIDTH / 4 + 100
-    start_y = 700  # Adjust this value to position below the scheduler
-    layer_width = 150
-    node_radius = 15
+    start_x = SCREEN_WIDTH / 6
+    end_x = SCREEN_WIDTH * 5 / 6  # Fixed position for output nodes
+    start_y = 600
+    node_radius = 10
+    vertical_spacing = 60
 
     node_positions = {}
-    layer_positions = {}
     node_layer = {}
 
-    def make_hashable(nid):
-        if isinstance(nid, (int, str)):
-            return nid
-        elif isinstance(nid, list):
-            return tuple(nid)
-        else:
-            return str(nid)
+    input_node_names = {
+        net.input_nodes[0]: "Grade",
+        net.input_nodes[1]: "School",
+        net.input_nodes[2]: "Preferred Time",
+        net.input_nodes[3]: "Interest",
+        net.input_nodes[4]: "Obstacle",
+        net.input_nodes[5]: "Location"
+    }
 
-    # Determine positions for input, hidden, and output nodes
+    def make_hashable(nid):
+        return tuple(nid) if isinstance(nid, list) else nid
+
     input_nodes = [make_hashable(nid) for nid in net.input_nodes]
     output_nodes = [make_hashable(nid) for nid in net.output_nodes]
     hidden_nodes = [make_hashable(node[0]) for node in net.node_evals if make_hashable(node[0]) not in input_nodes and make_hashable(node[0]) not in output_nodes]
 
-    all_layers = [input_nodes, hidden_nodes, output_nodes]
+    # Position input nodes
+    for i, node_id in enumerate(input_nodes):
+        y = start_y + i * vertical_spacing
+        node_positions[node_id] = (start_x, y)
+        node_layer[node_id] = 0
 
-    # Assign positions to each node
-    for layer_index, layer in enumerate(all_layers):
-        layer_positions[layer_index] = []
-        y_offset = start_y
-        for node_id in layer:
-            node_positions[node_id] = (start_x + layer_index * layer_width, y_offset)
-            layer_positions[layer_index].append(node_id)
-            y_offset += 50
-            node_layer[node_id] = layer_index
+    # Position output nodes
+    for i, node_id in enumerate(output_nodes):
+        y = start_y + i * vertical_spacing
+        node_positions[node_id] = (end_x, y)
+        node_layer[node_id] = float('inf')  # Use infinity to denote output layer
 
-    # Draw connections (edges) between nodes
+    # Calculate depths for hidden nodes
+    depth_cache = {node: 0 for node in input_nodes}
+
+    def calculate_node_depth(node_id, node_evals, depth_cache):
+        if node_id in depth_cache:
+            return depth_cache[node_id]
+        node = next((n for n in node_evals if make_hashable(n[0]) == node_id), None)
+        if node is None:
+            depth_cache[node_id] = 0
+            return 0
+        incoming_connections = node[5]
+        max_depth = max(calculate_node_depth(make_hashable(conn_id), node_evals, depth_cache) for conn_id, _ in incoming_connections) + 1
+        depth_cache[node_id] = max_depth
+        return max_depth
+
+    for node_id in hidden_nodes:
+        calculate_node_depth(node_id, net.node_evals, depth_cache)
+
+    max_depth = max(depth_cache.values()) if depth_cache else 0
+
+    # Position hidden nodes
+    if max_depth > 0:
+        layer_width = (end_x - start_x) / (max_depth + 1)
+        hidden_layers = [[] for _ in range(max_depth)]
+        for node_id in hidden_nodes:
+            depth = depth_cache[node_id]
+            hidden_layers[depth - 1].append(node_id)
+
+        for layer_index, layer in enumerate(hidden_layers, start=1):
+            x = start_x + layer_index * layer_width
+            y_positions = [start_y + i * vertical_spacing for i in range(len(layer))]
+            for node_id, y in zip(layer, y_positions):
+                node_positions[node_id] = (x, y)
+                node_layer[node_id] = layer_index
+
+    # Draw connections
     for node in net.node_evals:
         node_id = make_hashable(node[0])
         x, y = node_positions[node_id]
-        incoming = node[5]  # The connections are in the 6th element of the tuple
+        incoming = node[5]
         for conn_id, weight in incoming:
             conn_id = make_hashable(conn_id)
             if conn_id in node_positions:
@@ -217,33 +264,21 @@ def draw_neural_network(net, genome_id, fitness):
     for node_id, (x, y) in node_positions.items():
         pygame.draw.circle(screen, NODE_COLOR, (x, y), node_radius)
 
-        # Display node information based on type
         if node_id in input_nodes:
-            text = f"Input: {node_id}"
+            text = input_node_names.get(node_id, f"Input: {node_id}")
         elif node_id in output_nodes:
             text = f"Output: {node_id}"
         else:
             text = f"Hidden: {node_id}"
 
-        # Render text next to the node
         node_text = font.render(text, True, (255, 255, 255))
         screen.blit(node_text, (x + node_radius + 5, y - node_radius))
-
-    # Display genome ID and fitness
-    gen_text = font.render(f"Genome ID: {genome_id}", True, (255, 255, 255))
-    fit_text = font.render(f"Fitness: {fitness:.2f}", True, (255, 255, 255))
-    screen.blit(gen_text, (start_x - 100, SCREEN_HEIGHT - 60))
-    screen.blit(fit_text, (start_x - 100, SCREEN_HEIGHT - 30))
-
-
-
 
 def main():
     config_path = "config-feedforward"
     config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
                          neat.DefaultSpeciesSet, neat.DefaultStagnation,
                          config_path)
-
 
     for student in students:
         student['x'] = random.randint(0, SCREEN_WIDTH)
@@ -292,8 +327,6 @@ def main():
                 clock.tick(60)  # Control the frame rate for display
 
     pygame.quit()
-
-
 
 if __name__ == "__main__":
     main()
