@@ -45,13 +45,13 @@ students = [
     {"name": "Alice", "grade": 9, "school": "School A", "preferred_time": "9:00", "color": student_colors[0], "interest": "Math", "location": "Classroom"},
     {"name": "Bob", "grade": 10, "school": "School A", "preferred_time": "10:00", "color": student_colors[1], "interest": "Science", "location": "Recess"},
     {"name": "Charlie", "grade": 11, "school": "School B", "preferred_time": "11:00", "color": student_colors[2], "interest": "History", "location": "Speech Therapy Room"},
-    {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3], "interest": "Arts", "location": "Library"},
-    {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4], "interest": "Math", "location": "Gym"},
-    {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5], "interest": "Science", "location": "Classroom"},
-    {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6], "interest": "History", "location": "Recess"},
-    {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7], "interest": "Arts", "location": "Speech Therapy Room"},
-    {"name": "Ivy", "grade": 9, "school": "School A", "preferred_time": "14:00", "color": student_colors[0], "interest": "Math", "location": "Library"},
-    {"name": "Jack", "grade": 10, "school": "School B", "preferred_time": "15:00", "color": student_colors[1], "interest": "Science", "location": "Gym"},
+    # {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3], "interest": "Arts", "location": "Library"},
+    # {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4], "interest": "Math", "location": "Gym"},
+    # {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5], "interest": "Science", "location": "Classroom"},
+    # {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6], "interest": "History", "location": "Recess"},
+    # {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7], "interest": "Arts", "location": "Speech Therapy Room"},
+    # {"name": "Ivy", "grade": 9, "school": "School A", "preferred_time": "14:00", "color": student_colors[0], "interest": "Math", "location": "Library"},
+    # {"name": "Jack", "grade": 10, "school": "School B", "preferred_time": "15:00", "color": student_colors[1], "interest": "Science", "location": "Gym"},
 ]
 
 teachers = [
@@ -80,8 +80,9 @@ def evaluate_grouping(genomes, config):
 
         # Reset groups
         groups = [[] for _ in range(len(rooms))]
+        unscheduled_students = students[:]  # Start with all students unscheduled
 
-        for student in students:
+        for student in unscheduled_students[:]:
             # Normalize inputs
             inputs = (
                 student["grade"] / 12,
@@ -100,20 +101,18 @@ def evaluate_grouping(genomes, config):
             if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in groups[group_index]) and \
                all(student["location"] == existing_student["location"] for existing_student in groups[group_index]):  # Check location match
                 groups[group_index].append(student)
+                unscheduled_students.remove(student)  # Remove student from unscheduled list
             else:
-                # Find alternative group or create a new single-student group
+                # Try to find an alternative group for the student
                 for i, group in enumerate(groups):
                     if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group) and \
                        all(student["location"] == existing_student["location"] for existing_student in group):  # Check location match
                         groups[i].append(student)
+                        unscheduled_students.remove(student)  # Remove student from unscheduled list
                         break
-                else:
-                    # If no suitable group found, create a new single-student group
-                    empty_group_index = next((i for i, group in enumerate(groups) if len(group) == 0), None)
-                    if empty_group_index is not None:
-                        groups[empty_group_index].append(student)
-                    else:
-                        fitness -= 100  # Penalty if no empty group available for single-student placement
+
+        # Penalize for unscheduled students
+        fitness -= 100 * len(unscheduled_students)
 
         # Re-evaluate fitness based on updated criteria
         for i, group in enumerate(groups):
@@ -162,14 +161,16 @@ def evaluate_grouping(genomes, config):
         genome.fitness = max(0, fitness)
 
         # Optional visualization and delay
-        draw_groups(groups, genome_id, fitness)
+        draw_groups(groups, unscheduled_students, genome_id, fitness)
         draw_neural_network(net, genome_id, fitness)
         pygame.display.flip()
         pygame.time.delay(0)
 
 
-def draw_groups(groups, genome_id, fitness):
+def draw_groups(groups, unscheduled_students, genome_id, fitness):
     screen.fill(BACKGROUND_COLOR)
+
+    # Draw scheduled groups in rooms
     for i, (room, group) in enumerate(zip(rooms, groups)):
         pygame.draw.rect(screen, ROOM_COLOR, room)
         time_slot = time_slots[i % len(time_slots)]
@@ -189,6 +190,17 @@ def draw_groups(groups, genome_id, fitness):
         for teacher in teachers:
             if teacher["school"] == (group[0]["school"] if group else "") and teacher["obstacle"] == time_slot:
                 pygame.draw.rect(screen, OBSTACLE_COLOR, (room.x, room.y, 10, room.height))
+
+    # Draw unscheduled students list at the bottom
+    unscheduled_y = 600
+    pygame.draw.rect(screen, (50, 50, 50), (0, unscheduled_y, SCREEN_WIDTH, SCREEN_HEIGHT - unscheduled_y))
+    unscheduled_text = font.render("Unscheduled Students:", True, (255, 255, 255))
+    screen.blit(unscheduled_text, (10, unscheduled_y + 10))
+
+    for i, student in enumerate(unscheduled_students):
+        text = font.render(f"{student['name']} ({student['grade']} - {student['school']})", True, student['color'])
+        screen.blit(text, (10, unscheduled_y + 40 + i * 30))
+
 
     gen_text = font.render(f"Genome ID: {genome_id}", True, (255, 255, 255))
     fit_text = font.render(f"Fitness: {fitness:.2f}", True, (255, 255, 255))
@@ -296,7 +308,6 @@ def draw_neural_network(net, genome_id, fitness):
         screen.blit(node_text, (x + node_radius + 5, y - node_radius))
 
 
-
 def main():
     config_path = "config-feedforward"
     config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
@@ -340,8 +351,8 @@ def main():
     generation = 0
 
     # Define the fitness threshold for considering the problem solved
-    fitness_threshold = 2000  # Adjust this threshold as per your criteria
-    print("Starting NEAT algorithm...")
+    fitness_threshold = population.config.fitness_threshold # Adjust this threshold as per your criteria
+    print("Starting NEAT algorithm...",fitness_threshold)
 
     while running:
         for event in pygame.event.get():
@@ -373,7 +384,6 @@ def main():
                 clock.tick(60)  # Control the frame rate for display
 
     pygame.quit()
-
 
 
 if __name__ == "__main__":
