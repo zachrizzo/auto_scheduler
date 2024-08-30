@@ -72,32 +72,36 @@ def evaluate_grouping(genomes, config):
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
 
-        fitness = 1000
+        fitness = 1000  # Initial fitness can be adjusted
+
+        # Reset groups
         groups = [[] for _ in range(len(rooms))]
 
         for student in students:
+            # Normalize inputs
             inputs = (
                 student["grade"] / 12,
                 schools.index(student["school"]) / len(schools),
                 time_slots.index(student["preferred_time"]) / len(time_slots)
             )
             output = net.activate(inputs)
+
+            # Determine group index
             group_index = min(int(output[0] * len(groups)), len(groups) - 1)
 
+            # Check group constraints and assign students
             if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in groups[group_index]):
                 groups[group_index].append(student)
             else:
+                # Find alternative group or penalize heavily
                 for i, group in enumerate(groups):
                     if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group):
                         groups[i].append(student)
                         break
                 else:
-                    empty_groups = [i for i, g in enumerate(groups) if not g]
-                    if empty_groups:
-                        groups[empty_groups[0]].append(student)
-                    else:
-                        groups[min(range(len(groups)), key=lambda i: len(groups[i]))].append(student)
+                    fitness -= 500  # Heavier penalty for no valid group found
 
+        # Re-evaluate fitness based on updated criteria
         for i, group in enumerate(groups):
             if len(group) == 0:
                 fitness -= 100
@@ -124,13 +128,15 @@ def evaluate_grouping(genomes, config):
                     if abs(student1["grade"] - student2["grade"]) > 1:
                         fitness -= 1000
 
+        # Assign calculated fitness
         genome.fitness = max(0, fitness)
 
+        # Optional visualization and delay
         draw_groups(groups, genome_id, fitness)
-        draw_neural_network(net, genome_id, fitness)  # Corrected drawing function call
-
+        draw_neural_network(net, genome_id, fitness)
         pygame.display.flip()
         pygame.time.delay(0)
+
 
 def draw_groups(groups, genome_id, fitness):
     screen.fill(BACKGROUND_COLOR)
@@ -178,7 +184,6 @@ def draw_neural_network(net, genome_id, fitness):
         else:
             return str(nid)
 
-
     # Determine positions for input, hidden, and output nodes
     input_nodes = [make_hashable(nid) for nid in net.input_nodes]
     output_nodes = [make_hashable(nid) for nid in net.output_nodes]
@@ -208,9 +213,21 @@ def draw_neural_network(net, genome_id, fitness):
                 color = CONNECTION_POSITIVE_COLOR if weight > 0 else CONNECTION_NEGATIVE_COLOR
                 pygame.draw.line(screen, color, (x1, y1), (x, y), 2)
 
-    # Draw nodes
+    # Draw nodes and display information
     for node_id, (x, y) in node_positions.items():
         pygame.draw.circle(screen, NODE_COLOR, (x, y), node_radius)
+
+        # Display node information based on type
+        if node_id in input_nodes:
+            text = f"Input: {node_id}"
+        elif node_id in output_nodes:
+            text = f"Output: {node_id}"
+        else:
+            text = f"Hidden: {node_id}"
+
+        # Render text next to the node
+        node_text = font.render(text, True, (255, 255, 255))
+        screen.blit(node_text, (x + node_radius + 5, y - node_radius))
 
     # Display genome ID and fitness
     gen_text = font.render(f"Genome ID: {genome_id}", True, (255, 255, 255))
@@ -227,6 +244,7 @@ def main():
                          neat.DefaultSpeciesSet, neat.DefaultStagnation,
                          config_path)
 
+
     for student in students:
         student['x'] = random.randint(0, SCREEN_WIDTH)
         student['y'] = random.randint(0, SCREEN_HEIGHT)
@@ -240,10 +258,9 @@ def main():
     clock = pygame.time.Clock()
     generation = 0
 
-      # Define the fitness threshold for considering the problem solved
-    fitness_threshold = 1500  # Adjust this threshold as per your criteria
+    # Define the fitness threshold for considering the problem solved
+    fitness_threshold = 1000  # Adjust this threshold as per your criteria
     print("Starting NEAT algorithm...")
-
 
     while running:
         for event in pygame.event.get():
@@ -260,7 +277,23 @@ def main():
         if winner.fitness >= fitness_threshold:
             print(f"Solution found in generation {generation} with fitness {winner.fitness}")
 
+            # Enter a loop to display the winning group continuously
+            display_winner = True
+            while display_winner:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        display_winner = False
+                        running = False
+
+                # Display the final solution
+                evaluate_grouping([(1, winner)], config)
+
+                pygame.display.flip()
+                clock.tick(60)  # Control the frame rate for display
+
     pygame.quit()
+
+
 
 if __name__ == "__main__":
     main()
