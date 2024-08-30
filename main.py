@@ -76,6 +76,7 @@ def evaluate_grouping(genomes, config):
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
 
+
         fitness = 1000  # Initial fitness can be adjusted
 
         # Reset groups
@@ -360,7 +361,7 @@ def main():
     generation = 0
 
     # Define the fitness threshold for considering the problem solved
-    fitness_threshold = 2000
+    fitness_threshold = config.fitness_threshold  # Or set it directly if not using from config
     print("Starting NEAT algorithm...",fitness_threshold)
 
     while running:
