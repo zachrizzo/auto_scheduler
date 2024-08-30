@@ -101,19 +101,24 @@ def evaluate_grouping(genomes, config):
                all(student["location"] == existing_student["location"] for existing_student in groups[group_index]):  # Check location match
                 groups[group_index].append(student)
             else:
-                # Find alternative group or penalize heavily
+                # Find alternative group or create a new single-student group
                 for i, group in enumerate(groups):
                     if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group) and \
                        all(student["location"] == existing_student["location"] for existing_student in group):  # Check location match
                         groups[i].append(student)
                         break
                 else:
-                    fitness -= 500  # Heavier penalty for no valid group found
+                    # If no suitable group found, create a new single-student group
+                    empty_group_index = next((i for i, group in enumerate(groups) if len(group) == 0), None)
+                    if empty_group_index is not None:
+                        groups[empty_group_index].append(student)
+                    else:
+                        fitness -= 100  # Penalty if no empty group available for single-student placement
 
         # Re-evaluate fitness based on updated criteria
         for i, group in enumerate(groups):
             if len(group) == 0:
-                fitness -= 100
+                fitness -= 200  # Increased penalty for empty groups
             elif len(group) > 4:
                 fitness -= 50 * (len(group) - 4)
 
@@ -121,21 +126,37 @@ def evaluate_grouping(genomes, config):
                 school = group[0]["school"]
                 time_slot = time_slots[i % len(time_slots)]
 
+                # Penalize if schools are mixed within a group
                 if not all(student["school"] == school for student in group):
-                    fitness -= 200
+                    fitness -= 400
 
+                # Penalize if any teacher's obstacle overlaps with the group's time slot
                 for teacher in teachers:
                     if teacher["school"] == school and teacher["obstacle"] == time_slot:
                         fitness -= 300
 
+                # Reward if the student is assigned to their preferred time slot
                 for student in group:
                     if student["preferred_time"] == time_slot:
                         fitness += 50
 
-            for i, student1 in enumerate(group):
-                for student2 in group[i+1:]:
-                    if abs(student1["grade"] - student2["grade"]) > 1:
-                        fitness -= 1000
+                # Additional reward if all students have the same interest
+                if all(student["interest"] == group[0]["interest"] for student in group):
+                    fitness += 100
+
+                # Reward if the group size is optimal (e.g., between 2 and 4)
+                if 2 <= len(group) <= 4:
+                    fitness += 100
+                elif len(group) == 1:
+                    fitness += 50  # Smaller reward for single-student groups
+                else:
+                    fitness -= 50 * abs(len(group) - 3)  # Penalize more for being further from optimal size
+
+                # Penalize heavily if there are large grade gaps
+                for student1 in group:
+                    for student2 in group:
+                        if abs(student1["grade"] - student2["grade"]) > 1:
+                            fitness -= 100
 
         # Assign calculated fitness
         genome.fitness = max(0, fitness)
@@ -274,6 +295,8 @@ def draw_neural_network(net, genome_id, fitness):
         node_text = font.render(text, True, (255, 255, 255))
         screen.blit(node_text, (x + node_radius + 5, y - node_radius))
 
+
+
 def main():
     config_path = "config-feedforward"
     config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
@@ -289,12 +312,35 @@ def main():
     stats = neat.StatisticsReporter()
     population.add_reporter(stats)
 
+    def check_extinction(population):
+        fitnesses = [genome.fitness for genome in population.population.values() if genome.fitness is not None]
+        if not fitnesses:
+            print("Warning: No valid fitness values found.")
+            return False
+        best_fitness = max(fitnesses)
+        if best_fitness < config.genome_config.fitness_threshold:
+            print(f"Extinction event triggered! Best fitness: {best_fitness}")
+            return True
+        return False
+
+    # In your main loop:
+    if check_extinction(population):
+        population = neat.Population(config)  # Reset the population
+
+    # Add a custom extinction handler
+    def on_extinction():
+        print("Total extinction occurred! Resetting population...")
+
+    # Add custom extinction handler to NEAT
+    population.config.reset_on_extinction = True
+    population.config.extinction_callback = on_extinction
+
     running = True
     clock = pygame.time.Clock()
     generation = 0
 
     # Define the fitness threshold for considering the problem solved
-    fitness_threshold = 1000  # Adjust this threshold as per your criteria
+    fitness_threshold = 2000  # Adjust this threshold as per your criteria
     print("Starting NEAT algorithm...")
 
     while running:
@@ -327,6 +373,8 @@ def main():
                 clock.tick(60)  # Control the frame rate for display
 
     pygame.quit()
+
+
 
 if __name__ == "__main__":
     main()
