@@ -19,7 +19,7 @@ font = pygame.font.Font(None, 24)
 schools = ["School A", "School B"]
 time_slots = ["9:00", "10:00", "11:00", "14:00", "15:00"]
 interests = ["Math", "Science", "History", "Arts"]
-locations = ["Classroom", "Recess", "Speech Therapy Room", "Library", "Gym"]  # New locations added
+locations = ["Classroom", "Recess", "Speech Therapy Room", "Library", "Gym"]
 
 rooms = [
     pygame.Rect(50, 50, 200, 200),
@@ -45,13 +45,13 @@ students = [
     {"name": "Alice", "grade": 9, "school": "School A", "preferred_time": "9:00", "color": student_colors[0], "interest": "Math", "location": "Classroom"},
     {"name": "Bob", "grade": 10, "school": "School A", "preferred_time": "10:00", "color": student_colors[1], "interest": "Science", "location": "Recess"},
     {"name": "Charlie", "grade": 11, "school": "School B", "preferred_time": "11:00", "color": student_colors[2], "interest": "History", "location": "Speech Therapy Room"},
-    # {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3], "interest": "Arts", "location": "Library"},
-    # {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4], "interest": "Math", "location": "Gym"},
-    # {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5], "interest": "Science", "location": "Classroom"},
-    # {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6], "interest": "History", "location": "Recess"},
-    # {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7], "interest": "Arts", "location": "Speech Therapy Room"},
-    # {"name": "Ivy", "grade": 9, "school": "School A", "preferred_time": "14:00", "color": student_colors[0], "interest": "Math", "location": "Library"},
-    # {"name": "Jack", "grade": 10, "school": "School B", "preferred_time": "15:00", "color": student_colors[1], "interest": "Science", "location": "Gym"},
+    {"name": "David", "grade": 12, "school": "School B", "preferred_time": "14:00", "color": student_colors[3], "interest": "Arts", "location": "Library"},
+    {"name": "Eve", "grade": 9, "school": "School A", "preferred_time": "15:00", "color": student_colors[4], "interest": "Math", "location": "Gym"},
+    {"name": "Frank", "grade": 10, "school": "School B", "preferred_time": "9:00", "color": student_colors[5], "interest": "Science", "location": "Classroom"},
+    {"name": "Grace", "grade": 11, "school": "School A", "preferred_time": "10:00", "color": student_colors[6], "interest": "History", "location": "Recess"},
+    {"name": "Henry", "grade": 12, "school": "School B", "preferred_time": "11:00", "color": student_colors[7], "interest": "Arts", "location": "Speech Therapy Room"},
+    {"name": "Ivy", "grade": 9, "school": "School A", "preferred_time": "14:00", "color": student_colors[0], "interest": "Math", "location": "Library"},
+    {"name": "Jack", "grade": 10, "school": "School B", "preferred_time": "15:00", "color": student_colors[1], "interest": "Science", "location": "Gym"},
 ]
 
 teachers = [
@@ -127,7 +127,7 @@ def evaluate_grouping(genomes, config):
 
                 # Penalize if schools are mixed within a group
                 if not all(student["school"] == school for student in group):
-                    fitness -= 400
+                    fitness -= 600
 
                 # Penalize if any teacher's obstacle overlaps with the group's time slot
                 for teacher in teachers:
@@ -156,6 +156,15 @@ def evaluate_grouping(genomes, config):
                     for student2 in group:
                         if abs(student1["grade"] - student2["grade"]) > 1:
                             fitness -= 100
+
+        # Introduce additional dynamic penalties/rewards to avoid stagnation
+        # Reward diversity within groups
+        group_diversity = sum(len(set(student['school'] for student in group)) for group in groups if group)
+        fitness += group_diversity * 10  # Encourage diverse groups if allowed by other criteria
+
+        # Penalize repetitiveness in assignments
+        if len(set(len(group) for group in groups)) == 1:
+            fitness -= 50  # Penalize if all groups are the same size, suggesting lack of diversity in decision making
 
         # Assign calculated fitness
         genome.fitness = max(0, fitness)
@@ -351,7 +360,7 @@ def main():
     generation = 0
 
     # Define the fitness threshold for considering the problem solved
-    fitness_threshold = population.config.fitness_threshold # Adjust this threshold as per your criteria
+    fitness_threshold = 2000
     print("Starting NEAT algorithm...",fitness_threshold)
 
     while running:

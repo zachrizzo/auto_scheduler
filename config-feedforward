@@ -1,8 +1,8 @@
 [NEAT]
 fitness_criterion     = max
 fitness_threshold     = 2000.0
-pop_size              = 100
-reset_on_extinction   = False
+pop_size              = 50
+reset_on_extinction   = True
 
 [DefaultGenome]
 # node activation options
@@ -65,7 +65,7 @@ weight_mutate_rate      = 0.8
 weight_replace_rate     = 0.1
 
 [DefaultSpeciesSet]
-compatibility_threshold = 1.5
+compatibility_threshold = 5.0
 
 [DefaultStagnation]
 species_fitness_func = max
