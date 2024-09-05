@@ -89,133 +89,116 @@ def move_student(student, target_x, target_y):
         student['y'] = target_y
 
 def evaluate_grouping(genomes, config):
+    best_fitness = float('-inf')
+    best_groups = None
+    best_unscheduled = None
+    best_genome_id = None
+    best_net = None
+    genome_counter = 0  # Counter to track every 10 genomes
+
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
 
-        fitness = 1000  # Initial fitness can be adjusted
-
-        # Reset groups
+        fitness = 1000  # Start with a baseline fitness
         groups = [[] for _ in range(len(rooms))]
-        unscheduled_students = students[:]  # Start with all students unscheduled
+        unscheduled_students = students.copy()
 
+        # Add randomness in group assignment for exploration
+        random.shuffle(unscheduled_students)
+
+        # First pass: Use neural network to make initial assignments
         for student in unscheduled_students[:]:
-            # Normalize inputs
             inputs = (
                 student["grade"] / 12,
                 schools.index(student["school"]) / len(schools),
                 time_slots.index(student["preferred_time"]) / len(time_slots),
-                interests.index(student["interest"]) / len(interests),  # Interest input
-                int(any(teacher["obstacle"] == student["preferred_time"] for teacher in teachers)),  # Obstacle input
-                locations.index(student["location"]) / len(locations)  # Location input
+                interests.index(student["interest"]) / len(interests),
+                int(any(teacher["obstacle"] == student["preferred_time"] for teacher in teachers)),
+                locations.index(student["location"]) / len(locations)
             )
             output = net.activate(inputs)
-
-            # Determine group index
             group_index = min(int(output[0] * len(groups)), len(groups) - 1)
 
-            # Check group constraints and assign students
-            if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in groups[group_index]) and \
-               all(student["location"] == existing_student["location"] for existing_student in groups[group_index]) and \
-               all(student["school"] == existing_student["school"] for existing_student in groups[group_index]):  # Check location and school match
-                groups[group_index].append(student)
-                unscheduled_students.remove(student)  # Remove student from unscheduled list
-            else:
-                # Try to find an alternative group for the student
-                for i, group in enumerate(groups):
-                    if all(abs(student["grade"] - existing_student["grade"]) <= 1 for existing_student in group) and \
-                       all(student["location"] == existing_student["location"] for existing_student in group) and \
-                       all(student["school"] == existing_student["school"] for existing_student in group):  # Check location and school match
-                        groups[i].append(student)
-                        unscheduled_students.remove(student)  # Remove student from unscheduled list
-                        break
+            # Add flexibility by allowing students into groups with slight mismatches
+            if len(groups[group_index]) < 4:
+                if not groups[group_index] or (
+                    abs(student["grade"] - groups[group_index][0]["grade"]) <= 2 and  # Allow larger grade difference
+                    student["school"] == groups[group_index][0]["school"] and
+                    student["location"] == groups[group_index][0]["location"]
+                ):
+                    groups[group_index].append(student)
+                    unscheduled_students.remove(student)
 
-        # Penalize for unscheduled students
-        if len(unscheduled_students) > 0:
-            fitness -= 100 * len(unscheduled_students)
-        else:
-            # Reward if all students are scheduled
-            fitness += 200
+        # Second pass: Try to fit remaining students with flexibility
+        for student in unscheduled_students[:]:
+            for group in groups:
+                if len(group) < 4 and (not group or (
+                    abs(student["grade"] - group[0]["grade"]) <= 2 and  # Allow more mismatch
+                    student["school"] == group[0]["school"] and
+                    student["location"] == group[0]["location"]
+                )):
+                    group.append(student)
+                    unscheduled_students.remove(student)
+                    break
 
-        # Re-evaluate fitness based on updated criteria
-        for i, group in enumerate(groups):
+        # Calculate fitness
+        for group in groups:
             if len(group) == 0:
-                fitness -= 200  # Increased penalty for empty groups
-            elif len(group) > 4:
-                fitness -= 50 * (len(group) - 4)
+                fitness -= 50  # Less harsh penalty for empty groups
+            elif len(group) == 1:
+                fitness += 25  # Lower reward for small groups
+            elif 2 <= len(group) <= 4:
+                fitness += 100 * len(group)  # Higher reward for balanced groups
             else:
-                # Reward for group having optimal size
-                fitness += 50
+                fitness -= 25 * (len(group) - 4)  # Lower penalty for oversized groups
 
             if len(group) > 0:
-                school = group[0]["school"]
-                location = group[0]["location"]
-                time_slot = time_slots[i % len(time_slots)]
-
-                # Penalize if schools are mixed within a group
-                if not all(student["school"] == school for student in group):
-                    fitness -= 1000  # Increased penalty for mixed schools
-
-                # Penalize if locations are mixed within a group
-                if not all(student["location"] == location for student in group):
-                    fitness -= 1000  # Increased penalty for mixed locations
-
-                # Penalize if any teacher's obstacle overlaps with the group's time slot
-                for teacher in teachers:
-                    if teacher["school"] == school and teacher["obstacle"] == time_slot:
-                        fitness -= 300
-                else:
-                    # Reward if no teacher obstacles overlap
-                    fitness += 100
-
-                # Reward if the student is assigned to their preferred time slot
-                for student in group:
-                    if student["preferred_time"] == time_slot:
-                        fitness += 50
-
-                # Additional reward if all students have the same interest
+                time_slot = time_slots[groups.index(group) % len(time_slots)]
+                if all(student["preferred_time"] == time_slot for student in group):
+                    fitness += 50 * len(group)
                 if all(student["interest"] == group[0]["interest"] for student in group):
-                    fitness += 100
+                    fitness += 50 * len(group)
 
-                # Reward if the group size is optimal (e.g., between 2 and 4)
-                if 2 <= len(group) <= 4:
-                    fitness += 100
-                elif len(group) == 1:
-                    fitness += 50  # Smaller reward for single-student groups
-                else:
-                    fitness -= 50 * abs(len(group) - 3)  # Penalize more for being further from optimal size
+        # Reduce heavy penalties for unscheduled students
+        fitness -= 100 * len(unscheduled_students)
 
-                # Penalize heavily if there are large grade gaps
-                for student1 in group:
-                    for student2 in group:
-                        if abs(student1["grade"] - student2["grade"]) > 1:
-                            fitness -= 100
+        # Add bonus for solutions with fewer unscheduled students, even if not perfect
+        if len(unscheduled_students) < len(students) / 2:
+            fitness += 200  # Bonus for scheduling more than half
 
-        # Introduce additional dynamic penalties/rewards to avoid stagnation
-        # Reward diversity within groups
-        group_diversity = sum(len(set(student['school'] for student in group)) for group in groups if group)
-        fitness += group_diversity * 10  # Encourage diverse groups if allowed by other criteria
-
-        # Penalize repetitiveness in assignments
-        if len(set(len(group) for group in groups)) == 1:
-            fitness -= 50  # Penalize if all groups are the same size, suggesting lack of diversity in decision making
-
-        # Additional reward if no penalties have been applied
-        if fitness >= 1000:  # Assuming 1000 is the starting baseline fitness
-            fitness += 200  # Extra reward for perfect scenario
-
-        # Assign calculated fitness
         genome.fitness = max(0, fitness)
 
-        # Optional visualization and delay
-        draw_groups(groups, unscheduled_students, genome_id, fitness)
-        draw_neural_network(net, genome_id, fitness)
-        pygame.display.flip()
-        pygame.time.delay(0)
+        if fitness > best_fitness:
+            best_fitness = fitness
+            best_groups = groups
+            best_unscheduled = unscheduled_students
+            best_genome_id = genome_id
+            best_net = net
+
+        # Increment the counter
+        genome_counter += 1
+
+        # Draw every 10 genomes
+        if genome_counter % 100 == 0 and best_groups:
+            draw_groups(best_groups, best_unscheduled, best_genome_id, best_fitness)
+            draw_neural_network(best_net, best_genome_id, best_fitness)
+            pygame.display.flip()
+
+    return best_fitness
+
 
 
 
 def draw_groups(groups, unscheduled_students, genome_id, fitness):
     screen.fill(BACKGROUND_COLOR)
+
+    # Calculate number of scheduled and unscheduled students
+    scheduled_count = sum(len(group) for group in groups)
+    unscheduled_count = len(unscheduled_students)
+
+    # Draw the counts at the top of the screen
+    count_text = font.render(f"Scheduled: {scheduled_count} | Unscheduled: {unscheduled_count}", True, (255, 255, 255))
+    screen.blit(count_text, (10, 10))
 
     # Draw scheduled groups in rooms
     for i, (room, group) in enumerate(zip(rooms, groups)):
@@ -223,6 +206,10 @@ def draw_groups(groups, unscheduled_students, genome_id, fitness):
         time_slot = time_slots[i % len(time_slots)]
         text = font.render(f"Time: {time_slot}", True, (255, 255, 255))
         screen.blit(text, (room.x + 10, room.y + 10))
+
+        for teacher in teachers:
+            if group and teacher["school"] == group[0]["school"] and teacher["obstacle"] == time_slot:
+                pygame.draw.rect(screen, OBSTACLE_COLOR, (room.x, room.y, 10, room.height))
 
         for j, student in enumerate(group):
             target_x = room.x + 40 + (j % 2) * 80
@@ -247,7 +234,6 @@ def draw_groups(groups, unscheduled_students, genome_id, fitness):
     for i, student in enumerate(unscheduled_students):
         text = font.render(f"{student['name']} ({student['grade']} - {student['school']})", True, student['color'])
         screen.blit(text, (10, unscheduled_y + 40 + i * 30))
-
 
     gen_text = font.render(f"Genome ID: {genome_id}", True, (255, 255, 255))
     fit_text = font.render(f"Fitness: {fitness:.2f}", True, (255, 255, 255))
