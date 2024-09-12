@@ -1,10 +1,13 @@
 import neat
 import pygame
 import random
+import pickle
+import os
+from itertools import product
 
 pygame.init()
-SCREEN_WIDTH = 1000
-SCREEN_HEIGHT = 1000
+SCREEN_WIDTH = 1200
+SCREEN_HEIGHT = 800
 BACKGROUND_COLOR = (30, 30, 30)
 ROOM_COLOR = (200, 200, 200)
 OBSTACLE_COLOR = (255, 0, 0)
@@ -16,24 +19,27 @@ screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("Advanced Classroom Scheduler")
 font = pygame.font.Font(None, 24)
 
+# Define file paths for saving and loading the neural network
+SAVE_FILE = "trained_winner.pkl"
+
 schools = ["School A", "School B"]
 time_slots = ["9:00", "10:00", "11:00", "14:00", "15:00"]
 interests = ["Math", "Science", "History", "Arts"]
 locations = ["Classroom", "Recess", "Speech Therapy Room", "Library", "Gym"]
 
-rooms = [
-    pygame.Rect(50, 50, 200, 200),
-    pygame.Rect(300, 50, 200, 200),
-    pygame.Rect(550, 50, 200, 200),
-    pygame.Rect(50, 300, 200, 200),
-    pygame.Rect(300, 300, 200, 200),
-    pygame.Rect(550, 300, 200, 200),
-]
+# Define rooms (assuming one room per location)
+rooms = {
+    "Classroom": pygame.Rect(50, 50, 200, 200),
+    "Recess": pygame.Rect(300, 50, 200, 200),
+    "Speech Therapy Room": pygame.Rect(550, 50, 200, 200),
+    "Library": pygame.Rect(50, 300, 200, 200),
+    "Gym": pygame.Rect(300, 300, 200, 200),
+}
 
 student_colors = [
-    (255, 0, 0),  # Red
-    (0, 255, 0),  # Green
-    (0, 0, 255),  # Blue
+    (255, 0, 0),    # Red
+    (0, 255, 0),    # Green
+    (0, 0, 255),    # Blue
     (255, 255, 0),  # Yellow
     (255, 0, 255),  # Magenta
     (0, 255, 255),  # Cyan
@@ -100,10 +106,12 @@ def evaluate_grouping(genomes, config):
         net = neat.nn.FeedForwardNetwork.create(genome, config)
 
         fitness = 1000  # Start with a baseline fitness
-        groups = [[] for _ in range(len(rooms))]
+        # Create group slots as combinations of time slots and rooms
+        group_slots = [{'students': [], 'room': rooms[location], 'time_slot': time_slot, 'location': location}
+                       for time_slot in time_slots for location in locations]
         unscheduled_students = students.copy()
 
-        # Add randomness in group assignment for exploration
+        # Add randomness in student order for exploration
         random.shuffle(unscheduled_students)
 
         # First pass: Use neural network to make initial assignments
@@ -113,56 +121,63 @@ def evaluate_grouping(genomes, config):
                 schools.index(student["school"]) / len(schools),
                 time_slots.index(student["preferred_time"]) / len(time_slots),
                 interests.index(student["interest"]) / len(interests),
-                int(any(teacher["obstacle"] == student["preferred_time"] for teacher in teachers)),
+                int(any(teacher["obstacle"] == student["preferred_time"] and teacher["school"] == student["school"] for teacher in teachers)),
                 locations.index(student["location"]) / len(locations)
             )
             output = net.activate(inputs)
-            group_index = min(int(output[0] * len(groups)), len(groups) - 1)
+            # Filter groups matching student's preferred time and location
+            available_groups = [group for group in group_slots
+                                if group['time_slot'] == student['preferred_time'] and group['location'] == student['location']]
+            if not available_groups:
+                continue  # No available groups for this student's preferences
+            total_groups = len(available_groups)
+            group_index = min(int(output[0] * total_groups), total_groups - 1)
+            group = available_groups[group_index]
 
-            # Add flexibility by allowing students into groups with slight mismatches
-            if len(groups[group_index]) < 4:
-                if not groups[group_index] or (
-                    abs(student["grade"] - groups[group_index][0]["grade"]) <= 2 and  # Allow larger grade difference
-                    student["school"] == groups[group_index][0]["school"] and
-                    student["location"] == groups[group_index][0]["location"]
+            # Add student to group if not full and matches grouping rules
+            if len(group['students']) < 4:
+                if not group['students'] or (
+                    abs(student["grade"] - group['students'][0]["grade"]) <= 1 and
+                    student["school"] == group['students'][0]["school"]
                 ):
-                    groups[group_index].append(student)
+                    group['students'].append(student)
                     unscheduled_students.remove(student)
 
-        # Second pass: Try to fit remaining students with flexibility
+        # Second pass: Try to fit remaining students with more flexibility
         for student in unscheduled_students[:]:
-            for group in groups:
-                if len(group) < 4 and (not group or (
-                    abs(student["grade"] - group[0]["grade"]) <= 2 and  # Allow more mismatch
-                    student["school"] == group[0]["school"] and
-                    student["location"] == group[0]["location"]
+            # Try to find any available group matching time and location
+            available_groups = [group for group in group_slots
+                                if group['time_slot'] == student['preferred_time'] and group['location'] == student['location']]
+            for group in available_groups:
+                if len(group['students']) < 4 and (not group['students'] or (
+                    abs(student["grade"] - group['students'][0]["grade"]) <= 2 and
+                    student["school"] == group['students'][0]["school"]
                 )):
-                    group.append(student)
+                    group['students'].append(student)
                     unscheduled_students.remove(student)
                     break
 
         # Calculate fitness
-        for group in groups:
-            if len(group) == 0:
-                fitness -= 50  # Less harsh penalty for empty groups
-            elif len(group) == 1:
-                fitness += 25  # Lower reward for small groups
-            elif 2 <= len(group) <= 4:
-                fitness += 100 * len(group)  # Higher reward for balanced groups
+        for group in group_slots:
+            if len(group['students']) == 0:
+                fitness -= 10  # Minor penalty for empty groups
+            elif len(group['students']) == 1:
+                fitness += 25  # Small group reward
+            elif 2 <= len(group['students']) <= 4:
+                fitness += 100 * len(group['students'])  # Reward balanced groups
             else:
-                fitness -= 25 * (len(group) - 4)  # Lower penalty for oversized groups
+                fitness -= 25 * (len(group['students']) - 4)  # Penalty for oversized groups
 
-            if len(group) > 0:
-                time_slot = time_slots[groups.index(group) % len(time_slots)]
-                if all(student["preferred_time"] == time_slot for student in group):
-                    fitness += 50 * len(group)
-                if all(student["interest"] == group[0]["interest"] for student in group):
-                    fitness += 50 * len(group)
+            if len(group['students']) > 0:
+                if all(student["preferred_time"] == group['time_slot'] for student in group['students']):
+                    fitness += 50 * len(group['students'])
+                if all(student["interest"] == group['students'][0]["interest"] for student in group['students']):
+                    fitness += 50 * len(group['students'])
 
-        # Reduce heavy penalties for unscheduled students
+        # Penalty for unscheduled students
         fitness -= 100 * len(unscheduled_students)
 
-        # Add bonus for solutions with fewer unscheduled students, even if not perfect
+        # Bonus for scheduling more than half the students
         if len(unscheduled_students) < len(students) / 2:
             fitness += 200  # Bonus for scheduling more than half
 
@@ -170,7 +185,7 @@ def evaluate_grouping(genomes, config):
 
         if fitness > best_fitness:
             best_fitness = fitness
-            best_groups = groups
+            best_groups = group_slots
             best_unscheduled = unscheduled_students
             best_genome_id = genome_id
             best_net = net
@@ -178,7 +193,7 @@ def evaluate_grouping(genomes, config):
         # Increment the counter
         genome_counter += 1
 
-        # Draw every 10 genomes
+        # Draw every 100 genomes
         if genome_counter % 100 == 0 and best_groups:
             draw_groups(best_groups, best_unscheduled, best_genome_id, best_fitness)
             draw_neural_network(best_net, best_genome_id, best_fitness)
@@ -186,14 +201,11 @@ def evaluate_grouping(genomes, config):
 
     return best_fitness
 
-
-
-
 def draw_groups(groups, unscheduled_students, genome_id, fitness):
     screen.fill(BACKGROUND_COLOR)
 
     # Calculate number of scheduled and unscheduled students
-    scheduled_count = sum(len(group) for group in groups)
+    scheduled_count = sum(len(group['students']) for group in groups)
     unscheduled_count = len(unscheduled_students)
 
     # Draw the counts at the top of the screen
@@ -201,45 +213,49 @@ def draw_groups(groups, unscheduled_students, genome_id, fitness):
     screen.blit(count_text, (10, 10))
 
     # Draw scheduled groups in rooms
-    for i, (room, group) in enumerate(zip(rooms, groups)):
-        pygame.draw.rect(screen, ROOM_COLOR, room)
-        time_slot = time_slots[i % len(time_slots)]
-        text = font.render(f"Time: {time_slot}", True, (255, 255, 255))
-        screen.blit(text, (room.x + 10, room.y + 10))
+    y_offset = 50
+    x_offset = 50
+    room_width = 180
+    room_height = 80
+    for group in groups:
+        if len(group['students']) == 0:
+            continue  # Skip empty groups
 
+        location_index = list(rooms.keys()).index(group['location'])
+        time_slot_index = time_slots.index(group['time_slot'])
+        x = x_offset + time_slot_index * (room_width + 10)
+        y = y_offset + location_index * (room_height + 10)
+        pygame.draw.rect(screen, ROOM_COLOR, (x, y, room_width, room_height))
+        text = font.render(f"{group['location']} @ {group['time_slot']}", True, (0, 0, 0))
+        screen.blit(text, (x + 5, y + 5))
+
+        # Check for teacher obstacles
         for teacher in teachers:
-            if group and teacher["school"] == group[0]["school"] and teacher["obstacle"] == time_slot:
-                pygame.draw.rect(screen, OBSTACLE_COLOR, (room.x, room.y, 10, room.height))
+            if group['students'] and teacher["school"] == group['students'][0]["school"] and teacher["obstacle"] == group['time_slot']:
+                pygame.draw.rect(screen, OBSTACLE_COLOR, (x, y, 10, room_height))
 
-        for j, student in enumerate(group):
-            target_x = room.x + 40 + (j % 2) * 80
-            target_y = room.y + 60 + (j // 2) * 60
+        for j, student in enumerate(group['students']):
+            target_x = x + 30 + (j % 2) * 60
+            target_y = y + 30 + (j // 2) * 30
             move_student(student, target_x, target_y)
-            pygame.draw.circle(screen, student['color'], (int(student['x']), int(student['y'])), 15)
-            text = font.render(f"{student['name']} ({student['grade']})", True, (255, 255, 255))
-            screen.blit(text, (int(student['x']) - 30, int(student['y']) + 20))
-            text = font.render(f"{student['school']}", True, (255, 255, 255))
-            screen.blit(text, (int(student['x']) - 30, int(student['y']) + 40))
-
-        for teacher in teachers:
-            if teacher["school"] == (group[0]["school"] if group else "") and teacher["obstacle"] == time_slot:
-                pygame.draw.rect(screen, OBSTACLE_COLOR, (room.x, room.y, 10, room.height))
+            pygame.draw.circle(screen, student['color'], (int(student['x']), int(student['y'])), 10)
+            text = font.render(f"{student['name']}", True, (255, 255, 255))
+            screen.blit(text, (int(student['x']) - 20, int(student['y']) + 15))
 
     # Draw unscheduled students list at the bottom
-    unscheduled_y = 600
+    unscheduled_y = SCREEN_HEIGHT - 150
     pygame.draw.rect(screen, (50, 50, 50), (0, unscheduled_y, SCREEN_WIDTH, SCREEN_HEIGHT - unscheduled_y))
     unscheduled_text = font.render("Unscheduled Students:", True, (255, 255, 255))
     screen.blit(unscheduled_text, (10, unscheduled_y + 10))
 
     for i, student in enumerate(unscheduled_students):
         text = font.render(f"{student['name']} ({student['grade']} - {student['school']})", True, student['color'])
-        screen.blit(text, (10, unscheduled_y + 40 + i * 30))
+        screen.blit(text, (10, unscheduled_y + 40 + i * 20))
 
     gen_text = font.render(f"Genome ID: {genome_id}", True, (255, 255, 255))
     fit_text = font.render(f"Fitness: {fitness:.2f}", True, (255, 255, 255))
-    screen.blit(gen_text, (10, SCREEN_HEIGHT - 60))
-    screen.blit(fit_text, (10, SCREEN_HEIGHT - 30))
-
+    screen.blit(gen_text, (SCREEN_WIDTH - 200, 10))
+    screen.blit(fit_text, (SCREEN_WIDTH - 200, 40))
 
 def draw_neural_network(net, genome_id, fitness):
     start_x = SCREEN_WIDTH / 6
@@ -318,28 +334,65 @@ def draw_neural_network(net, genome_id, fitness):
     for node in net.node_evals:
         node_id = make_hashable(node[0])
         x, y = node_positions[node_id]
-        incoming = node[5]
+        incoming = node[5]  # This contains all incoming connections (from input, hidden, or output)
+
         for conn_id, weight in incoming:
             conn_id = make_hashable(conn_id)
-            if conn_id in node_positions:
+            if conn_id in node_positions:  # Check if the connected node's position exists
                 x1, y1 = node_positions[conn_id]
                 color = CONNECTION_POSITIVE_COLOR if weight > 0 else CONNECTION_NEGATIVE_COLOR
                 pygame.draw.line(screen, color, (x1, y1), (x, y), 2)
+            else:
+                # Handle the case where a hidden node connects to an output node
+                if conn_id in output_nodes:
+                    x1, y1 = node_positions[conn_id]
+                    pygame.draw.line(screen, CONNECTION_POSITIVE_COLOR if weight > 0 else CONNECTION_NEGATIVE_COLOR, (x1, y1), (x, y), 2)
 
     # Draw nodes and display information
     for node_id, (x, y) in node_positions.items():
-        pygame.draw.circle(screen, NODE_COLOR, (x, y), node_radius)
+        pygame.draw.circle(screen, NODE_COLOR, (int(x), int(y)), node_radius)
 
         if node_id in input_nodes:
             text = input_node_names.get(node_id, f"Input: {node_id}")
         elif node_id in output_nodes:
-            text = f"Output: {node_id}"
+            text = f"Output"
         else:
-            text = f"Hidden: {node_id}"
+            text = f"Hidden"
 
         node_text = font.render(text, True, (255, 255, 255))
         screen.blit(node_text, (x + node_radius + 5, y - node_radius))
 
+def save_winner(winner):
+    with open(SAVE_FILE, "wb") as f:
+        pickle.dump(winner, f)
+    print(f"Winner saved to {SAVE_FILE}")
+
+def load_winner(config):
+    if os.path.exists(SAVE_FILE):
+        with open(SAVE_FILE, "rb") as f:
+            winner = pickle.load(f)
+        print(f"Winner loaded from {SAVE_FILE}")
+        return winner
+    else:
+        print(f"No saved winner found at {SAVE_FILE}")
+        return None
+
+def test_winner(winner, config):
+    # This function will use the saved winner to display the test results
+    running = True
+    clock = pygame.time.Clock()
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+        # Display the results using the loaded winner
+        evaluate_grouping([(1, winner)], config)
+
+        pygame.display.flip()
+        clock.tick(60)  # Control the frame rate for display
+
+    pygame.quit()
 
 def main():
     config_path = "config-feedforward"
@@ -351,46 +404,24 @@ def main():
         student['x'] = random.randint(0, SCREEN_WIDTH)
         student['y'] = random.randint(0, SCREEN_HEIGHT)
 
+    # Check if we have a saved winner
+    saved_winner = load_winner(config)
+    if saved_winner:
+        print("Running test with saved winner...")
+        test_winner(saved_winner, config)
+        return
+
     population = neat.Population(config)
     population.add_reporter(neat.StdOutReporter(True))
     stats = neat.StatisticsReporter()
     population.add_reporter(stats)
-
-    def check_extinction(population):
-        fitnesses = [genome.fitness for genome in population.population.values() if genome.fitness is not None]
-        if not fitnesses:
-            print("Warning: No valid fitness values found.")
-            return False
-        best_fitness = max(fitnesses)
-        if best_fitness < config.genome_config.fitness_threshold:
-            print(f"Extinction event triggered! Best fitness: {best_fitness}")
-            return True
-        return False
-
-    # Check for extinction at the start
-    if check_extinction(population):
-        population = neat.Population(config)  # Reset the population
-
-    # Add a custom extinction handler
-    def on_extinction():
-        print("Total extinction occurred! Resetting population...")
-
-    # Add custom extinction handler to NEAT
-    population.config.reset_on_extinction = True
-    population.config.extinction_callback = on_extinction
 
     running = True
     clock = pygame.time.Clock()
     generation = 0
 
     # Define the fitness threshold for considering the problem solved
-    fitness_threshold = config.fitness_threshold  # Or set it directly if not using from config
-    print("Starting NEAT algorithm...", fitness_threshold)
-
-    # Initialize variables for fitness plateau detection
-    best_fitness = None
-    stagnant_generations = 0
-    max_stagnant_generations = 200  # Number of generations to allow without improvement
+    fitness_threshold = 5000  # Set an appropriate fitness threshold
 
     while running:
         for event in pygame.event.get():
@@ -400,27 +431,19 @@ def main():
         # Run NEAT for one generation
         winner = population.run(evaluate_grouping, 1)
         generation += 1
-        clock.tick(1200)
+        clock.tick(60)
 
         # Debugging output to monitor fitness and generation
         print(f"Generation {generation} completed. Best fitness: {winner.fitness}")
-
-        # Check if fitness has plateaued
-        if best_fitness is None or winner.fitness > best_fitness:
-            best_fitness = winner.fitness
-            stagnant_generations = 0
-        else:
-            stagnant_generations += 1
-
-        if stagnant_generations >= max_stagnant_generations:
-            print(f"No improvement for {max_stagnant_generations} generations. Best fitness achieved: {best_fitness}")
-            break
 
         if winner.fitness >= fitness_threshold:
             print(f"Solution found in generation {generation} with fitness {winner.fitness}")
             break
 
-    # Display the final solution continuously
+    print("Training completed, saving the winner...")
+    save_winner(winner)
+
+    # Display the final solution
     print("Displaying final schedule...")
     display_winner = True
     while display_winner:
@@ -430,15 +453,13 @@ def main():
 
         # Display the final solution
         evaluate_grouping([(1, winner)], config)
-
         pygame.display.flip()
-        clock.tick(60)  # Control the frame rate for display
+        clock.tick(60)
 
     pygame.quit()
 
     # Return the best fitness and generation count for further analysis or logging
-    return best_fitness, generation
-
+    return winner.fitness, generation
 
 if __name__ == "__main__":
     best_fitness, total_generations = main()
